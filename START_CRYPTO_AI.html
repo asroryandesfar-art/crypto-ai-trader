@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Start Crypto AI Trader</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101418;
+      --panel: #171d23;
+      --line: #2b353f;
+      --text: #eef3f7;
+      --muted: #9facb7;
+      --blue: #39a7ff;
+      --green: #33d17a;
+      --yellow: #ffd166;
+      --red: #ff5c77;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Segoe UI, Arial, sans-serif;
+    }
+    main {
+      width: min(720px, calc(100vw - 32px));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 28px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 44px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .status {
+      display: grid;
+      gap: 12px;
+      margin: 24px 0;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .label {
+      color: var(--muted);
+    }
+    .value {
+      font-weight: 700;
+      text-align: right;
+    }
+    .waiting {
+      color: var(--yellow);
+    }
+    .ready {
+      color: var(--green);
+    }
+    .offline {
+      color: var(--red);
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    a {
+      min-width: 160px;
+      text-align: center;
+      text-decoration: none;
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: #061018;
+      background: var(--blue);
+      font-weight: 700;
+    }
+    a.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+    code {
+      color: var(--yellow);
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Crypto AI Trader</h1>
+    <p>Launcher sedang menyalakan backend, database SQLite, dan web dashboard yang membaca database yang sama.</p>
+
+    <section class="status" aria-live="polite">
+      <div class="row">
+        <span class="label">Web dashboard</span>
+        <span id="webStatus" class="value waiting">Menunggu...</span>
+      </div>
+      <div class="row">
+        <span class="label">Database</span>
+        <span class="value ready">crypto_trader.db</span>
+      </div>
+      <div class="row">
+        <span class="label">Mode launcher</span>
+        <span class="value ready">Paper / aman</span>
+      </div>
+    </section>
+
+    <div class="actions">
+      <a href="http://127.0.0.1:8501" id="dashboardLink">Buka Dashboard</a>
+      <a class="secondary" href="runtime/launcher_status.json">Status DB</a>
+      <a class="secondary" href="logs/dashboard.err.log">Log Web</a>
+      <a class="secondary" href="logs/backend.err.log">Log Backend</a>
+    </div>
+  </main>
+
+  <script>
+    const webStatus = document.getElementById("webStatus");
+    const dashboardUrl = "http://127.0.0.1:8501";
+    let opened = false;
+
+    async function pingDashboard() {
+      try {
+        await fetch(`${dashboardUrl}/_stcore/health`, { mode: "no-cors", cache: "no-store" });
+        webStatus.textContent = "Online";
+        webStatus.className = "value ready";
+        if (!opened) {
+          opened = true;
+          setTimeout(() => {
+            window.location.href = dashboardUrl;
+          }, 900);
+        }
+      } catch (error) {
+        webStatus.textContent = "Menunggu...";
+        webStatus.className = "value waiting";
+      }
+    }
+
+    pingDashboard();
+    setInterval(pingDashboard, 2000);
+  </script>
+</body>
+</html>

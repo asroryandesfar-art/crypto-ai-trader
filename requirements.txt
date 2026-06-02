@@ -1,0 +1,40 @@
+# Core dependencies
+python-dotenv==1.0.0
+ccxt==4.0.105
+pandas==2.1.3
+numpy==1.24.3
+ta==0.10.2
+requests==2.31.0
+httpx==0.25.0
+
+# Binance & Exchange
+python-binance==1.20.1
+
+# AI & LLM
+groq==0.4.2
+
+# API clients
+feedparser==6.0.10
+
+# Database
+sqlalchemy==2.0.23
+sqlmodel==0.0.14
+
+# Dashboard
+streamlit==1.28.1
+plotly==5.17.0
+
+# Logging & Monitoring
+python-telegram-bot==20.3
+
+# Async
+aiohttp==3.9.1
+
+# Utilities
+pytz==2023.3
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Type checking
+types-requests==2.31.0.10
+types-pytz==2023.3.0.0
