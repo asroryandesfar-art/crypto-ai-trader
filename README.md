@@ -1,10 +1,16 @@
-# 🤖 AI Multi-Agent Crypto Trading Bot
+# Crypto AI Trader
 
-Production-ready AI-powered cryptocurrency trading bot built with Python. Features 9 specialized trading agents orchestrated by a supervisor AI to make intelligent trading decisions.
+**Local-first QVAC-compatible edge AI for multi-agent market intelligence.**
+
+Crypto AI Trader is a QVAC-compatible Edge AI intelligence showcase built from the existing `crypto_ai_trader` codebase. It demonstrates local-first multi-agent reasoning for crypto market intelligence while keeping inference private by default through a local QVAC endpoint.
+
+This project is positioned for the QVAC Hackathon as an Edge AI showcase, not as an automated trading product. The repository keeps the existing `crypto_ai_trader` codebase name to avoid risky folder-level changes.
+
+Hackathon materials: [QVAC Positioning](CRYPTO_AI_TRADER_QVAC_POSITIONING.md), [DoraHacks Submission](DORAHACKS_SUBMISSION.md), and [60-Second Demo Script](DEMO_SCRIPT.md).
 
 ## ✨ Features
 
-### 🧠 9 Specialized AI Agents
+### 🧠 Local Multi-Agent Intelligence
 - **Market Analyst Agent**: Multi-timeframe technical analysis (EMA, RSI, MACD, Bollinger Bands, ATR)
 - **News Agent**: Fetches and analyzes crypto news from RSS feeds
 - **Sentiment Agent**: Combines Fear & Greed Index with market sentiment
@@ -12,43 +18,45 @@ Production-ready AI-powered cryptocurrency trading bot built with Python. Featur
 - **Liquidation Agent**: Detects liquidation clusters and volatility spikes
 - **Risk Agent**: Calculates position sizing and risk parameters
 - **Hedge Agent**: Manages hedging strategies during high volatility
-- **Execution Agent**: Executes trades with paper/live mode support
-- **Supervisor Agent**: Orchestrates all agents and makes final trading decisions
+- **Execution Agent**: Records paper-mode execution telemetry; live execution remains explicitly gated and disabled by default
+- **Supervisor Agent**: Orchestrates all agents and produces structured market-intelligence decisions
 
-### 🛡️ Safety Features
-- **Default Paper Trading Mode**: No real trades unless explicitly enabled
-- **Daily Loss Limits**: Stops trading if daily loss exceeds threshold
-- **Position Size Limits**: Max 1% risk per trade, configurable leverage
-- **Confidence Threshold**: Only trades with 75%+ confidence (configurable)
-- **Emergency Stop Switch**: Instantly halt all trading
-- **Multi-level Validation**: Every trade goes through risk checks
+### 🛡️ Safety and Scope
+- **Default Paper Mode**: No real trades in the QVAC demo path
+- **Daily Loss Limits**: Deterministic guardrail enforced by local risk logic
+- **Position Size Limits**: Max 1% risk per paper decision, configurable leverage
+- **Confidence Threshold**: Low-confidence decisions are rejected by the safety gate
+- **Emergency Stop Switch**: Immediately locks runtime into safe paper-mode behavior
+- **Multi-level Validation**: Every decision goes through deterministic risk checks
 
 ### 📊 Dashboard
-- Real-time trading metrics
+- Real-time market-intelligence metrics
 - Portfolio monitoring
-- Trade history and analytics
+- Paper-mode decision history and analytics
 - Fear & Greed Index tracking
 - Risk metrics visualization
 - Alert system
 
-### 💱 Exchange Support
-- **Binance Futures** (primary)
-- CCXT for unified access to 100+ exchanges
-- Paper trading for backtesting
+### 💱 Data and Runtime Context
+- **Binance public market data** where configured
+- CCXT-compatible data access where configured
+- Paper-mode analysis for safe demonstration
 
 ### 🔗 Data Sources
 - CoinGecko API (market data)
-- Binance API (live price, volumes)
+- Binance API (public price and volume data where configured)
 - Alternative.me (Fear & Greed Index)
 - RSS Feeds (crypto news)
-- Groq API (LLM analysis)
+- Local QVAC server (default LLM inference)
+- Groq API (optional explicit fallback)
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 - Python 3.11+
-- Binance API keys (for live trading)
-- Groq API key (for AI analysis)
+- Binance API keys only if you intentionally test exchange integrations outside the QVAC demo
+- Local QVAC OpenAI-compatible server for AI analysis
+- Groq API key only when remote Groq fallback is explicitly enabled
 - Internet connection
 
 ### Installation
@@ -90,18 +98,27 @@ nano .env
 Edit `.env` file:
 
 ```env
-# REQUIRED - Groq API Key (Free from https://console.groq.com)
+# Default: private local inference through QVAC
+AI_PROVIDER=qvac
+QVAC_BASE_URL=http://127.0.0.1:11434/v1
+QVAC_API_KEY=local-qvac-token
+QVAC_MODEL=qvac-local
+LOCAL_ONLY_INFERENCE=true
+
+# Optional remote fallback. Disabled unless explicitly enabled.
+ENABLE_GROQ_FALLBACK=false
 GROQ_API_KEY=your_groq_key_here
 
-# Optional - For live trading only
+# Optional exchange integration keys. Not required for the QVAC demo.
 BINANCE_API_KEY=your_binance_key
 BINANCE_SECRET_KEY=your_binance_secret
 
-# Trading mode (paper, backtest, or live)
+# Runtime mode for the QVAC demo
 TRADING_MODE=paper
 
-# CRITICAL - Only set to true when ready for live trading
+# QVAC demo safety defaults
 LIVE_TRADING=false
+LIVE_TRADING_LOCKDOWN=true
 
 # Risk parameters
 MAX_RISK_PER_TRADE=1       # 1% max per trade
@@ -109,35 +126,35 @@ DAILY_MAX_LOSS=3           # 3% daily loss limit
 MAX_LEVERAGE=2             # 2x leverage max
 CONFIDENCE_THRESHOLD=75    # 75% min confidence
 
-# Trading symbols
+# Market symbols
 SYMBOLS=BTC/USDT,ETH/USDT,SOL/USDT
 ```
 
-## 🎯 Trading Modes
+## 🎯 Runtime Modes
 
-### Paper Trading (Default - Recommended for Testing)
+### Paper Mode (Default for QVAC Demo)
 ```bash
 TRADING_MODE=paper
 LIVE_TRADING=false
 ```
 - No real money at risk
-- Full simulation of trading logic
-- Perfect for backtesting and validation
+- Full local intelligence cycle without live execution
+- Suitable for hackathon demo, validation, and replay
 
-### Live Trading (⚠️ Use With Caution)
+### Live Mode (Not Part of Hackathon Demo)
 ```bash
 TRADING_MODE=live
 LIVE_TRADING=true  # MUST be true
 BINANCE_API_KEY=...
 BINANCE_SECRET_KEY=...
 ```
-- ⚠️ TRADES WITH REAL MONEY
-- Requires valid API keys
-- All safety checks are enforced
+- Not part of the Crypto AI Trader QVAC showcase
+- Requires explicit keys and safety unlocks
+- All existing safety checks remain enforced
 
-## 🏃 Running the Bot
+## 🏃 Running the Edge AI Showcase
 
-### Start Paper Trading
+### Start Paper-Mode Intelligence Cycle
 ```bash
 python main.py
 ```
@@ -145,7 +162,7 @@ python main.py
 Output:
 ```
 ============================================================
-CRYPTO AI TRADING BOT INITIALIZED
+CRYPTO AI TRADER INITIALIZED
 ============================================================
 Mode: PAPER
 Symbols: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
@@ -153,7 +170,7 @@ Max Risk per Trade: 1%
 Daily Max Loss: 3%
 ✓ Startup validation passed
 ✓ Services initialized
-✓ Trading loop started
+✓ Paper-mode intelligence loop started
 ```
 
 ### Start Dashboard (in another terminal)
@@ -163,9 +180,55 @@ streamlit run dashboard/app.py
 
 Visit `http://localhost:8501` in your browser.
 
+## Local QVAC Inference
+
+QVAC is the default AI provider. Crypto AI Trader sends chat-completion requests only to the loopback endpoint `http://127.0.0.1:11434/v1/chat/completions`. Start a QVAC OpenAI-compatible server separately and configure a model alias named `qvac-local`, or change `QVAC_MODEL` to your configured alias.
+
+Example QVAC server configuration:
+
+```json
+{
+  "serve": {
+    "models": {
+      "qvac-local": {
+        "model": "QWEN3_600M_INST_Q4",
+        "default": true
+      }
+    }
+  }
+}
+```
+
+Start the local server with bearer-token protection:
+
+```bash
+qvac serve openai --api-key local-qvac-token
+```
+
+Privacy defaults:
+
+- `AI_PROVIDER=qvac` selects local QVAC inference. `AI_PROVIDER=local_qvac` is also accepted.
+- `LOCAL_ONLY_INFERENCE=true` requires a loopback QVAC URL and blocks Groq fallback.
+- Set `LOCAL_ONLY_INFERENCE=false` and `ENABLE_GROQ_FALLBACK=true` only when remote fallback is explicitly intended.
+- If QVAC is unavailable, decisions use deterministic local fallback logic and provider telemetry reports `local_fallback`.
+
+## Activated Local Agents
+
+The paper-mode backend runs deterministic edge analysis before any execution step. For the QVAC showcase, the focus is local intelligence and telemetry:
+
+- Market Analyst: RSI, SMA, EMA, momentum, and volatility from cached public snapshots.
+- News Agent: RSS ingestion with keyword fallback and optional QVAC summary.
+- Sentiment Agent: local news scoring combined with optional Fear & Greed data.
+- Whale Tracker: public-volume anomaly detection from cached market snapshots.
+- Liquidation Agent: volatility and pressure-based liquidation-risk estimate.
+- Risk Agent: hard deterministic gate for paper mode, live lockdown, emergency stop, confidence threshold, daily loss budget, and liquidation risk.
+- Decision Agent: deterministic vote synthesis with optional QVAC explanation only.
+
+The dashboard reads persisted `agent_telemetry` rows and reports real agent activity and provider usage.
+
 ## 🔐 API Key Security
 
-### Getting Groq API Key (FREE)
+### Getting Groq API Key (Optional Remote Fallback)
 1. Visit https://console.groq.com
 2. Sign up for free
 3. Create new API key
@@ -189,7 +252,7 @@ Visit `http://localhost:8501` in your browser.
 - ✅ Monitor unusual account activity
 - ✅ Start with small amounts for testing
 
-## 📈 How Trading Decisions Are Made
+## 📈 How Market Intelligence Decisions Are Made
 
 ```
 1. Market Analyst → Technical Analysis (EMA, RSI, MACD, etc)
@@ -198,39 +261,39 @@ Visit `http://localhost:8501` in your browser.
    ↓
 3. Sentiment Agent → Fear & Greed + news sentiment
    ↓
-4. Whale Tracker → Monitor large transactions
+4. Whale Tracker → Detect public-volume anomaly signals
    ↓
 5. Liquidation Agent → Check volatility & liquidation risk
    ↓
-6. Risk Agent → Calculate position size & risk
+6. Risk Agent → Apply deterministic safety gate
    ↓
-7. Supervisor Agent → Combine all inputs, make final decision
+7. Supervisor Agent → Combine all inputs into structured decision JSON
    ↓
-8. Execution Agent → Execute trade in paper/live mode
+8. Execution Agent → Record paper-mode execution telemetry; live execution remains gated
 ```
 
-## 🎯 Trading Strategy
+## 🎯 Decision Semantics
 
-### Signal Generation
-- **BUY Signal**: Multiple timeframes bullish, sentiment positive, whales accumulating
-- **SELL Signal**: Multiple timeframes bearish, sentiment negative, whales distributing
-- **HOLD Signal**: Mixed signals, low confidence, or risk factors present
+### Structured Output
+- **BUY**: Local signals indicate constructive market conditions, subject to risk gate
+- **SELL**: Local signals indicate defensive market conditions, subject to risk gate
+- **HOLD**: Mixed signals, low confidence, local fallback, or safety flags are present
 
-### Risk Management
+### Deterministic Risk Gate
 ```
-Position Size = (Account × Risk%) / (Entry - Stop Loss)
-Risk = Max 1% per trade
+Risk = Max 1% per paper decision
 Daily Loss Limit = Max 3% per day
 Confidence Required = Min 75%
+AI Override = Not allowed
 ```
 
 ## 📊 Dashboard Features
 
-- 📈 **Market Overview**: Current prices, charts, trends
+- 📈 **Market Overview**: Current prices, charts, and local indicators
 - 😊 **Sentiment Analysis**: Fear & Greed Index, news sentiment
-- 🎯 **Trading Decisions**: Recent decisions and confidence scores
-- 💼 **Portfolio**: Account balance, open positions, P&L
-- 📜 **Trade History**: Completed trades with results
+- 🎯 **Structured Decisions**: Recent JSON decisions, confidence, and safety flags
+- 💼 **Paper Runtime State**: Demo balance, paper positions, and local state
+- 📜 **Decision History**: Paper-mode decision history and telemetry
 - ⚠️ **Risk Metrics**: Daily loss tracking, position limits
 - 🔔 **Alerts**: Real-time notifications and warnings
 
@@ -256,7 +319,8 @@ crypto_ai_trader/
 │   └── execution_agent.py
 │
 ├── services/                 # External API services
-│   ├── groq_service.py       # Groq LLM API
+│   ├── ai_provider.py        # Local QVAC and optional Groq routing
+│   ├── groq_service.py       # Legacy Groq service
 │   ├── binance_service.py    # Binance REST API
 │   ├── coingecko_service.py  # CoinGecko API
 │   ├── fear_greed_service.py # Fear & Greed Index
@@ -289,37 +353,32 @@ crypto_ai_trader/
     └── crypto_trader_*.log
 ```
 
-## ⚠️ Important Warnings
+## ⚠️ Safety and Non-Financial-Advice Notice
 
-### Risk Disclaimer
-```
-This bot trades with REAL MONEY in live mode. 
-Cryptocurrency trading carries significant risk of loss. 
-Past performance does not guarantee future results.
-```
+Crypto AI Trader is a QVAC Edge AI market intelligence demo. It is not financial advice, not a profit system, and not submitted as an automated trading product. The hackathon demo uses paper mode, live trading disabled, and live lockdown enabled.
 
-### Before Going Live
-- ✅ Test in paper mode for at least 7 days
-- ✅ Verify all calculations match your expectations
-- ✅ Start with small position sizes (0.1% risk)
-- ✅ Monitor performance closely
-- ✅ Have emergency stop available
-- ✅ Keep API keys secure
-- ✅ Use dedicated trading wallet
+### QVAC Demo Safety Checklist
+- ✅ Keep `TRADING_MODE=paper`
+- ✅ Keep `LIVE_TRADING=false`
+- ✅ Keep `LIVE_TRADING_LOCKDOWN=true`
+- ✅ Keep `LOCAL_ONLY_INFERENCE=true`
+- ✅ Keep `ENABLE_GROQ_FALLBACK=false` unless explicitly testing remote fallback
+- ✅ Verify dashboard provider telemetry shows `qvac` or `local_fallback`
+- ✅ Do not present outputs as financial advice
 
-### When NOT to Trade
-- ❌ Low liquidity markets
-- ❌ Extreme market volatility
-- ❌ Major news/events impacting market
-- ❌ Platform downtime/maintenance
-- ❌ If daily loss limit is reached
+### Hard Safety Rules
+- AI cannot override the deterministic risk gate
+- Cloud inference is disabled by default
+- Live execution is outside the QVAC demo scope
+- No profit guarantees are made
+- Outputs are market-intelligence signals only
 
 ## 🐛 Troubleshooting
 
 ### Bot won't start
 ```
-Error: GROQ_API_KEY is missing
-Fix: Add GROQ_API_KEY to .env file and restart
+Error: AI inference unavailable; using deterministic local fallback
+Fix: Start the local QVAC server and verify QVAC_BASE_URL, QVAC_API_KEY, and QVAC_MODEL.
 ```
 
 ### API connection errors
@@ -333,27 +392,26 @@ Fix: Check internet, verify API keys, check IP whitelisting
 Check: Confidence threshold, market conditions, risk parameters in logs
 ```
 
-## 📞 Support
+## 📞 Operational Checks
 
 - Check logs in `logs/` folder for detailed information
 - Verify `.env` configuration is correct
-- Ensure all required API keys are set
+- Ensure QVAC is running locally or expect deterministic fallback
 - Check internet connection and API rate limits
 
 ## 📚 Resources
 
-- [Groq API Docs](https://console.groq.com/docs)
-- [Binance API](https://binance-docs.github.io/apidocs/)
+- [DoraHacks Submission](DORAHACKS_SUBMISSION.md)
+- [60-Second Demo Script](DEMO_SCRIPT.md)
+- [QVAC Positioning Package](CRYPTO_AI_TRADER_QVAC_POSITIONING.md)
 - [CCXT Documentation](https://docs.ccxt.com/)
 - [CoinGecko API](https://www.coingecko.com/api)
 - [Fear & Greed Index](https://alternative.me/fear-and-greed-index)
 
 ## 📄 License
 
-Educational use only. Trade at your own risk.
+Educational and hackathon demonstration use only. This repository does not provide financial advice.
 
 ---
 
-**Made with ❤️ for crypto traders**
-
-*Version 1.0 - 2024*
+**Crypto AI Trader** - QVAC-compatible Edge AI market intelligence demo.

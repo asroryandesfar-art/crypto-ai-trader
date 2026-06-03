@@ -113,6 +113,17 @@ def ensure_dashboard_tables(db_path: Path, env: dict[str, str]) -> None:
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_telemetry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                status TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'local_rules',
+                result_json TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS trading_signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,

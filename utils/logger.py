@@ -62,6 +62,7 @@ def setup_logging(name: str, level: str = "INFO") -> logging.Logger:
         logger,
         (
             os.getenv("GROQ_API_KEY", ""),
+            os.getenv("QVAC_API_KEY", ""),
             os.getenv("BINANCE_API_KEY", ""),
             os.getenv("BINANCE_SECRET_KEY", ""),
             os.getenv("TELEGRAM_BOT_TOKEN", ""),

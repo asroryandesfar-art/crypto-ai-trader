@@ -1,5 +1,5 @@
 """
-Professional Crypto AI Trading Dashboard
+Professional Crypto AI Trader Dashboard
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Cyberpunk-inspired dark UI with real-time data integration.
 Features: Live prices, AI signals, whale tracker, news analysis, PnL tracking
@@ -22,8 +22,12 @@ from pathlib import Path
 import json
 import html
 import hmac
+import logging
 
+from services.ai_provider import create_ai_provider_from_env
 from utils.runtime_safety import connect_sqlite, write_env_value
+
+logger = logging.getLogger(__name__)
 
 try:
     from dotenv import load_dotenv
@@ -40,7 +44,7 @@ if load_dotenv:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(
-    page_title="Crypto AI Trading Dashboard",
+    page_title="Crypto AI Trader Dashboard",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -160,7 +164,7 @@ def require_dashboard_auth() -> None:
         return
     if st.session_state.get("dashboard_authenticated"):
         return
-    st.title("Crypto AI Trading Dashboard")
+    st.title("Crypto AI Trader Dashboard")
     provided = st.text_input("Dashboard password", type="password")
     if provided and hmac.compare_digest(provided, password):
         st.session_state.dashboard_authenticated = True
@@ -279,6 +283,60 @@ def get_latest_signals(limit=10):
     if not signals.empty:
         signals["timestamp"] = pd.to_datetime(signals["timestamp"])
     return signals
+
+
+AGENT_NAMES = ["MarketAnalyst", "NewsAgent", "SentimentAgent", "WhaleTracker", "LiquidationAgent", "RiskAgent", "DecisionAgent"]
+
+
+@st.cache_data(ttl=2)
+def get_agent_telemetry(limit=200):
+    """Read real local-agent telemetry written by the backend."""
+    telemetry = read_table(
+        """
+        SELECT timestamp, symbol, agent, status, provider, result_json
+        FROM agent_telemetry
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    if telemetry.empty:
+        return telemetry
+    telemetry["timestamp"] = pd.to_datetime(telemetry["timestamp"])
+    telemetry["result"] = telemetry["result_json"].apply(lambda value: json.loads(value) if value else {})
+    return telemetry
+
+
+def get_latest_agent_results():
+    """Return the newest persisted output for each active local agent."""
+    telemetry = get_agent_telemetry()
+    if telemetry.empty:
+        return {}
+    latest = {}
+    for _, row in telemetry.iterrows():
+        if row["agent"] not in latest:
+            latest[row["agent"]] = row.to_dict()
+    return latest
+
+
+def get_agent_runtime_status():
+    """Build dashboard status from persisted agent telemetry, not sample values."""
+    latest = get_latest_agent_results()
+    now = datetime.now()
+    rows = []
+    for name in AGENT_NAMES:
+        row = latest.get(name)
+        active = False
+        if row:
+            active = (now - row["timestamp"].to_pydatetime()).total_seconds() <= 180
+        rows.append({
+            "Agent": name,
+            "Active": active,
+            "Provider": row.get("provider", "not_run") if row else "not_run",
+            "Symbol": row.get("symbol", "-") if row else "-",
+            "Last Update": row["timestamp"].strftime("%H:%M:%S") if row else "not run",
+        })
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=5)
@@ -538,7 +596,7 @@ def render_asset_chart(asset, days=1, height=300):
 
 
 def local_chat_fallback(user_message, price_context, signal_context):
-    """Answer price questions when Groq is unavailable."""
+    """Answer price questions when configured AI inference is unavailable."""
     lowered = user_message.lower()
     if any(word in lowered for word in ["harga", "price", "btc", "eth", "sol"]):
         return (
@@ -546,7 +604,7 @@ def local_chat_fallback(user_message, price_context, signal_context):
             f"{price_context}\n\n"
             "Sinyal terbaru:\n\n"
             f"{signal_context}\n\n"
-            "Groq belum aktif di dashboard, jadi ini ringkasan lokal berbasis data market."
+            "AI lokal belum tersedia di dashboard, jadi ini ringkasan deterministik berbasis data market."
         )
 
     return (
@@ -556,13 +614,8 @@ def local_chat_fallback(user_message, price_context, signal_context):
     )
 
 
-def ask_groq_chat(user_message, price_context, signal_context):
-    """Ask Groq with live market context, falling back to local price answers."""
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key or api_key == "your_groq_api_key_here":
-        return local_chat_fallback(user_message, price_context, signal_context)
-
-    model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+def ask_ai_chat(user_message, price_context, signal_context):
+    """Ask the configured provider, falling back to a deterministic local answer."""
     prompt = (
         "You are the chat assistant inside a crypto trading dashboard. "
         "Answer in Indonesian unless the user asks for another language. "
@@ -575,33 +628,13 @@ def ask_groq_chat(user_message, price_context, signal_context):
     )
 
     try:
-        import requests
-
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "Be concise, factual, and risk-aware."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.2,
-                "max_tokens": 500,
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+        provider = create_ai_provider_from_env()
+        answer = provider.chat_completion(prompt, max_tokens=500)
+        if answer:
+            return answer
     except Exception as e:
-        return (
-            f"AI chat belum bisa terhubung ke Groq: {e}\n\n"
-            f"Ringkasan harga live:\n\n{price_context}"
-        )
+        logger.warning("Dashboard AI chat unavailable: %s", e)
+    return local_chat_fallback(user_message, price_context, signal_context)
 
 
 def get_sample_trade_data():
@@ -655,18 +688,8 @@ def get_sample_positions():
 
 
 def get_agent_logs():
-    """Get sample agent activity logs."""
-    backend_events = get_backend_events()
-    if not backend_events.empty:
-        return backend_events
-
-    return pd.DataFrame({
-        "timestamp": pd.date_range(start=datetime.now() - timedelta(hours=1), periods=12, freq="5min"),
-        "agent": ["MarketAnalyst", "NewsAgent", "SentimentAgent", "WhaleTracker", "RiskAgent"] * 2 + ["ExecutionAgent", "SupervisorAgent"],
-        "action": ["Analyzed BTC/USDT", "Parsed headlines", "Sentiment: Bullish", "Volume spike detected", 
-                   "Risk validated", "Position sizing calc", "Order placed", "Decision made"] * 2,
-        "status": ["✓ OK"] * 10 + ["⚠ WARNING", "✓ OK"],
-    })
+    """Return persisted backend activity without synthetic fallback rows."""
+    return get_backend_events()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -845,8 +868,8 @@ def create_whale_chart(data):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def page_overview():
-    st.title("🚀 Crypto AI Trading Dashboard")
-    st.markdown("Real-time intelligence for algorithmic crypto trading")
+    st.title("🚀 Crypto AI Trader Dashboard")
+    st.markdown("Local-first QVAC-compatible edge AI for multi-agent market intelligence")
     st.markdown("---")
 
     # Fetch live data
@@ -942,12 +965,15 @@ def page_overview():
     
     with c2:
         st.subheader("🐳 Whale Tracker")
-        whale_data = {
-            "time": ["1h ago", "2h ago", "3h ago", "4h ago"],
-            "buy_volume": [50, 75, 40, 60],
-            "sell_volume": [30, 20, 45, 35],
-        }
-        st.plotly_chart(create_whale_chart(whale_data), width="stretch")
+        whale_row = get_latest_agent_results().get("WhaleTracker")
+        if whale_row:
+            whale = whale_row["result"]
+            st.metric("Activity Score", whale.get("whale_activity_score", 0))
+            st.caption(f"Pressure: {whale.get('pressure', 'NEUTRAL')} | Volume ratio: {whale.get('volume_ratio', 1):.2f}x | Confidence: {whale.get('confidence', 0)}%")
+            for anomaly in whale.get("anomalies", []):
+                st.warning(anomaly)
+        else:
+            st.info("Waiting for real whale telemetry from the backend.")
 
     st.markdown("---")
 
@@ -1075,96 +1101,43 @@ def page_positions():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def page_signals():
-    st.title("🤖 AI Trading Signals")
-    st.markdown("Real-time signals from 9-agent consensus system")
+    st.title("🤖 Local Agent Trading Signals")
+    st.markdown("Real telemetry from the activated edge-analysis pipeline")
     st.markdown("---")
 
-    # Signal generation time
+    statuses = get_agent_runtime_status()
+    active_count = int(statuses["Active"].sum()) if not statuses.empty else 0
+    decision_row = get_latest_agent_results().get("DecisionAgent")
+    provider = decision_row.get("provider", "not_run") if decision_row else "not_run"
+    local_only = os.getenv("LOCAL_ONLY_INFERENCE", "true").strip().lower() in {"1", "true", "yes", "on"}
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Agents Active", "9/9", "All operational", delta_color="off")
+        st.metric("Agents Active", f"{active_count}/{len(AGENT_NAMES)}", "Measured telemetry", delta_color="off")
     with col2:
-        st.metric("Last Update", "2 seconds ago", "Real-time")
+        st.metric("Inference Provider", provider, "Latest decision", delta_color="off")
     with col3:
-        st.metric("Signal Quality", "94.2%", "Excellent", delta_color="off")
+        st.metric("Local Only", "ON" if local_only else "OFF", "Inference policy", delta_color="off")
 
     st.markdown("---")
-
-    # Detailed signals
     live_signals = get_latest_signals(9)
     if live_signals.empty:
-        signals_data = [
-            {"symbol": "BTC/USDT", "action": "HOLD", "confidence": 0, "reason": "Waiting for backend signal", "agents": ["Backend"]},
-        ]
+        st.info("Waiting for backend decisions.")
     else:
-        signals_data = [
-            {
-                "symbol": row["symbol"],
-                "action": row["action"],
-                "confidence": int(row["confidence"]),
-                "reason": row["reason"],
-                "agents": ["Groq", "Market Data", "Supervisor"],
-            }
-            for _, row in live_signals.iterrows()
-        ]
-
-    for signal in signals_data:
-        action_color = {"BUY": "#00ff41", "SELL": "#ff006e", "HOLD": "#ffd60a"}[signal["action"]]
-        signal["symbol"] = html_escape(signal["symbol"])
-        signal["action"] = html_escape(signal["action"])
-        signal["reason"] = html_escape(signal["reason"])
-        signal["agents"] = [html_escape(agent) for agent in signal["agents"]]
-        
-        st.markdown(f"""
-        <div style="background: linear-gradient(135deg, rgba({55 if signal['action']=='BUY' else 100 if signal['action']=='SELL' else 70},255,{65 if signal['action']=='BUY' else 110 if signal['action']=='SELL' else 160},0.05) 0%, transparent 100%); border: 2px solid {action_color}; border-radius: 8px; padding: 1.5rem; margin: 1rem 0;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
-                <div>
-                    <div style="font-size: 1.3rem; color: #00d4ff; font-weight: 600;">{signal['symbol']}</div>
-                    <div style="color: {action_color}; font-size: 1.1rem; font-weight: 600; margin-top: 0.3rem;">
-                        ▶ {signal['action']}
-                    </div>
-                </div>
-                <div style="text-align: right;">
-                    <div style="font-size: 1.5rem; color: {action_color}; font-weight: 600;">{signal['confidence']}%</div>
-                    <div style="color: #8892a6; font-size: 0.85rem;">Confidence</div>
-                </div>
-            </div>
-            
-            <div style="color: #e8eaed; margin-bottom: 1rem; line-height: 1.6;">
-                {signal['reason']}
-            </div>
-            
-            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-        """, unsafe_allow_html=True)
-        
-        for agent in signal["agents"]:
+        for _, row in live_signals.iterrows():
+            action = html_escape(row["action"])
+            symbol = html_escape(row["symbol"])
+            reason = html_escape(row["reason"])
+            color = {"BUY": "#00ff41", "SELL": "#ff006e", "HOLD": "#ffd60a"}.get(row["action"], "#ffd60a")
             st.markdown(f"""
-                <span style="background: rgba(0,212,255,0.2); color: #00d4ff; padding: 0.3rem 0.8rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">
-                    {agent} ✓
-                </span>
+            <div style="background: rgba(26,31,46,0.6); border-left: 3px solid {color}; padding: 1rem; margin: 0.5rem 0; border-radius: 6px;">
+                <b style="color:#00d4ff">{symbol}</b> <span style="color:{color}; float:right">{action} {int(row['confidence'])}%</span>
+                <div style="color:#e8eaed; margin-top:0.6rem">{reason}</div>
+            </div>
             """, unsafe_allow_html=True)
-        
-        st.markdown("</div></div>", unsafe_allow_html=True)
 
     st.markdown("---")
-    
-    st.subheader("Agent Performance")
-    agent_stats = pd.DataFrame({
-        "Agent": ["Market Analyst", "News Analyzer", "Sentiment", "Whale Tracker", "Liquidation", "Risk Agent", "Hedge Agent", "Execution", "Supervisor"],
-        "Accuracy": [92, 78, 85, 88, 81, 95, 72, 99, 94],
-        "Last Signal": ["2s", "45s", "15s", "8s", "120s", "5s", "200s", "1s", "2s"],
-    })
-    
-    fig = px.bar(agent_stats, x="Agent", y="Accuracy", color="Accuracy", 
-                 color_continuous_scale=["#ff006e", "#ffd60a", "#00ff41"],
-                 template="plotly_dark", height=300)
-    fig.update_layout(
-        paper_bgcolor="#1a1f2e",
-        plot_bgcolor="#0f1419",
-        font=dict(family="Monaco, monospace", color="#e8eaed"),
-        showlegend=False,
-    )
-    st.plotly_chart(fig, width="stretch")
+    st.subheader("Activated Agent Telemetry")
+    st.dataframe(statuses, width="stretch", hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1173,52 +1146,35 @@ def page_signals():
 
 def page_whale():
     st.title("🐳 Whale Tracker")
-    st.markdown("Monitor large volume anomalies and whale activity")
+    st.markdown("Public-volume anomaly telemetry from the local edge pipeline")
     st.markdown("---")
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(metric_card("Volume Spike", "2.8x", icon="📊"), unsafe_allow_html=True)
-    with col2:
-        st.markdown(metric_card("Buy Pressure", "68%", icon="📈"), unsafe_allow_html=True)
-    with col3:
-        st.markdown(metric_card("Whale Sentiment", "Accumulation", icon="🐳"), unsafe_allow_html=True)
-    with col4:
-        st.markdown(metric_card("Signal Strength", "Strong", icon="⚡"), unsafe_allow_html=True)
-
+    telemetry = get_agent_telemetry()
+    if telemetry.empty:
+        st.info("Waiting for backend whale analysis.")
+        return
+    whale_rows = telemetry[telemetry["agent"] == "WhaleTracker"].head(20)
+    if whale_rows.empty:
+        st.info("Waiting for backend whale analysis.")
+        return
+    latest = whale_rows.iloc[0]["result"]
+    cols = st.columns(4)
+    cols[0].metric("Activity Score", latest.get("whale_activity_score", 0))
+    cols[1].metric("Pressure", latest.get("pressure", "NEUTRAL"))
+    cols[2].metric("Volume Ratio", f"{latest.get('volume_ratio', 1):.2f}x")
+    cols[3].metric("Confidence", f"{latest.get('confidence', 0)}%")
     st.markdown("---")
-
-    # Whale activity chart
-    st.subheader("Buy/Sell Pressure (24h)")
-    whale_data = {
-        "time": pd.date_range(start=datetime.now() - timedelta(hours=24), periods=24, freq="h"),
-        "buy_volume": np.random.randint(30, 120, 24),
-        "sell_volume": np.random.randint(20, 100, 24),
-    }
-    st.plotly_chart(create_whale_chart(whale_data), width="stretch")
-
-    st.markdown("---")
-    st.subheader("Recent Whale Transactions")
-    
-    whales = [
-        {"time": "2 min ago", "type": "BUY", "symbol": "BTC", "amount": "50 BTC", "value": "$3.3M", "exchange": "Binance"},
-        {"time": "15 min ago", "type": "SELL", "symbol": "ETH", "amount": "5,000 ETH", "value": "$16.8M", "exchange": "Kraken"},
-        {"time": "1h ago", "type": "BUY", "symbol": "BTC", "amount": "75 BTC", "value": "$4.95M", "exchange": "FTX"},
-    ]
-    
-    for whale in whales:
-        whale_color = "#00ff41" if whale["type"] == "BUY" else "#ff006e"
-        st.markdown(f"""
-        <div style="background: rgba(26,31,46,0.6); border-left: 3px solid {whale_color}; padding: 1rem; margin: 0.5rem 0; border-radius: 6px;">
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr; gap: 1rem;">
-                <div><div style="color: #8892a6; font-size: 0.8rem;">Time</div><div style="color: #e8eaed;">{whale['time']}</div></div>
-                <div><div style="color: #8892a6; font-size: 0.8rem;">Type</div><div style="color: {whale_color}; font-weight: 600;">{whale['type']}</div></div>
-                <div><div style="color: #8892a6; font-size: 0.8rem;">Amount</div><div style="color: #00d4ff;">{whale['amount']}</div></div>
-                <div><div style="color: #8892a6; font-size: 0.8rem;">Value</div><div style="color: #ffd60a; font-weight: 600;">{whale['value']}</div></div>
-                <div><div style="color: #8892a6; font-size: 0.8rem;">Exchange</div><div style="color: #e8eaed;">{whale['exchange']}</div></div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    st.subheader("Detected Anomalies")
+    anomalies = latest.get("anomalies", [])
+    if anomalies:
+        for anomaly in anomalies:
+            st.warning(anomaly)
+    else:
+        st.info("No public-volume anomaly detected in the latest analysis.")
+    rows = []
+    for _, row in whale_rows.iterrows():
+        result = row["result"]
+        rows.append({"timestamp": row["timestamp"], "symbol": row["symbol"], "score": result.get("whale_activity_score", 0), "pressure": result.get("pressure", "NEUTRAL"), "volume_ratio": result.get("volume_ratio", 1), "confidence": result.get("confidence", 0)})
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1227,50 +1183,30 @@ def page_whale():
 
 def page_news():
     st.title("📰 News & Sentiment Analysis")
-    st.markdown("AI-powered news parsing and sentiment classification")
+    st.markdown("Local-first RSS classification with optional QVAC summary")
     st.markdown("---")
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(metric_card("Bullish News", "8", icon="📈"), unsafe_allow_html=True)
-    with col2:
-        st.markdown(metric_card("Bearish News", "3", icon="📉"), unsafe_allow_html=True)
-    with col3:
-        st.markdown(metric_card("Neutral", "5", icon="➡️"), unsafe_allow_html=True)
-    with col4:
-        st.markdown(metric_card("Sentiment Score", "+62", icon="📊"), unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    headlines = fetch_news_headlines()
-    st.subheader("Latest Headlines")
-    
-    sentiments = ["BULLISH", "BULLISH", "BEARISH", "NEUTRAL", "BULLISH", "BULLISH", "BEARISH", "NEUTRAL"]
-    sentiment_colors = {"BULLISH": "#00ff41", "BEARISH": "#ff006e", "NEUTRAL": "#ffd60a"}
-    
-    for idx, headline in enumerate(headlines[:8]):
-        sentiment = sentiments[idx] if idx < len(sentiments) else "NEUTRAL"
-        color = sentiment_colors.get(sentiment, "#8892a6")
-        
-        st.markdown(f"""
-        <div style="background: rgba(26,31,46,0.6); border-left: 3px solid {color}; padding: 1rem; margin: 0.5rem 0; border-radius: 6px; border: 1px solid rgba(0,212,255,0.15);">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                <div style="flex: 1;">
-                    <div style="color: #e8eaed; font-weight: 600; line-height: 1.4;">
-                        {headline['title'][:100]}...
-                    </div>
-                    <div style="color: #8892a6; font-size: 0.8rem; margin-top: 0.5rem;">
-                        {headline['published'][:10] if headline['published'] else 'Recent'}
-                    </div>
-                </div>
-                <div style="margin-left: 1rem; text-align: right; white-space: nowrap;">
-                    <span style="background: {color}20; color: {color}; padding: 0.3rem 0.8rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">
-                        {sentiment}
-                    </span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    latest = get_latest_agent_results()
+    news_row = latest.get("NewsAgent")
+    sentiment_row = latest.get("SentimentAgent")
+    if not news_row:
+        st.info("Waiting for backend news analysis.")
+        return
+    news = news_row["result"]
+    sentiment = sentiment_row["result"] if sentiment_row else {}
+    cols = st.columns(4)
+    cols[0].metric("News Sentiment", news.get("sentiment", "NEUTRAL"))
+    cols[1].metric("Impact Score", news.get("impact_score", 0))
+    cols[2].metric("Market Sentiment", sentiment.get("label", "NEUTRAL"))
+    cols[3].metric("Sentiment Score", sentiment.get("sentiment_score", 0))
+    st.caption(f"Summary provider: {news.get('provider', 'local_rules')}")
+    st.write(news.get("summary", "No summary available."))
+    st.subheader("Key Events")
+    events = news.get("key_events", [])
+    if events:
+        for event in events:
+            st.markdown(f"- {html_escape(event)}")
+    else:
+        st.info("No RSS headlines were available during the latest cycle.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1433,10 +1369,10 @@ def page_logs():
 
 def page_settings():
     st.title("⚙️ Settings & Configuration")
-    st.markdown("Manage trading parameters and system configuration")
+    st.markdown("Manage QVAC demo safety settings and local intelligence configuration")
     st.markdown("---")
 
-    with st.expander("🤖 Trading Parameters", expanded=True):
+    with st.expander("🤖 Market Intelligence Safety Parameters", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
             st.slider("Max Risk per Trade (%)", 0.1, 5.0, 1.0, step=0.1)
@@ -1446,13 +1382,13 @@ def page_settings():
             st.slider("Confidence Threshold (%)", 50, 95, 75, step=5)
         with col3:
             st.slider("Max Open Positions", 1, 10, 3, step=1)
-            st.selectbox("Trading Mode", ["Paper", "Backtest", "Live"])
+            st.selectbox("Runtime Mode", ["Paper", "Backtest", "Live"])
 
-    with st.expander("🌐 API Configuration", expanded=False):
-        st.warning("⚠️ Enter your API keys securely")
+    with st.expander("🌐 Provider and Data Configuration", expanded=False):
+        st.warning("⚠️ QVAC local inference is the default. Remote fallback must be explicitly enabled.")
         col1, col2 = st.columns(2)
         with col1:
-            st.text_input("Groq API Key", type="password", placeholder="Enter your Groq API key")
+            st.text_input("Groq API Key (optional fallback)", type="password", placeholder="Disabled unless fallback is enabled")
             st.text_input("Binance API Key", type="password", placeholder="Enter Binance API key")
         with col2:
             st.text_input("Binance Secret Key", type="password", placeholder="Enter Binance secret")
@@ -1468,7 +1404,7 @@ def page_settings():
             st.toggle("Whale Tracker", value=True)
 
     st.markdown("---")
-    st.subheader("🛑 Emergency Controls")
+    st.subheader("🛑 Safety Controls")
     
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
@@ -1482,17 +1418,17 @@ def page_settings():
     with col2:
         if st.button("✅ Resume Trading", type="secondary"):
             write_env_value(ENV_PATH, "EMERGENCY_STOP", "false")
-            st.success("Emergency stop cleared. Live trading remains locked until preflight passes.")
+            st.success("Emergency stop cleared. Live execution remains locked until preflight passes.")
     with col3:
-        st.info("Use emergency stop to immediately halt all trading activity.")
+        st.info("Use emergency stop to immediately halt runtime activity and keep the system in paper mode.")
 
     st.markdown("---")
     st.subheader("📥 Export & Backup")
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("Download Trade History"):
-            st.success("Trade history exported as CSV")
+        if st.button("Download Decision History"):
+            st.success("Decision history exported as CSV")
     with col2:
         if st.button("Backup Database"):
             st.success("Database backed up successfully")
@@ -1506,8 +1442,8 @@ def page_settings():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def page_ai_chat():
-    st.title("AI Chat")
-    st.markdown("Ask market questions with live dashboard price context")
+    st.title("QVAC Market Chat")
+    st.markdown("Ask market-intelligence questions using local dashboard context")
     st.markdown("---")
 
     prices = fetch_coingecko_prices()
@@ -1530,7 +1466,7 @@ def page_ai_chat():
 
     st.markdown("---")
 
-    with st.expander("Live context sent to AI", expanded=False):
+    with st.expander("Local context sent to configured provider", expanded=False):
         st.code(f"{price_context}\n\nRecent signals:\n{signal_context}", language="text")
 
     if "ai_chat_messages" not in st.session_state:
@@ -1555,8 +1491,8 @@ def page_ai_chat():
             st.markdown(user_message)
 
         with st.chat_message("assistant"):
-            with st.spinner("AI membaca harga live..."):
-                answer = ask_groq_chat(user_message, price_context, signal_context)
+            with st.spinner("Provider lokal membaca konteks market..."):
+                answer = ask_ai_chat(user_message, price_context, signal_context)
             st.markdown(answer)
 
         st.session_state.ai_chat_messages.append({"role": "assistant", "content": answer})
@@ -1569,16 +1505,22 @@ def main():
     mode_label = html_escape(backend_status["mode"].upper())
     last_seen = html_escape(backend_status["last_heartbeat"] or "not started")
     loop_count = html_escape(backend_status["loop_count"])
+    agent_statuses = get_agent_runtime_status()
+    active_agents = int(agent_statuses["Active"].sum()) if not agent_statuses.empty else 0
+    total_agents = len(AGENT_NAMES)
+    latest_decision = get_latest_agent_results().get("DecisionAgent")
+    sidebar_provider = html_escape(latest_decision.get("provider", "not_run") if latest_decision else "not_run")
+    sidebar_local_only = "ON" if os.getenv("LOCAL_ONLY_INFERENCE", "true").strip().lower() in {"1", "true", "yes", "on"} else "OFF"
 
     # Sidebar navigation
     with st.sidebar:
         st.markdown(f"""
         <div style="text-align: center; margin-bottom: 2rem;">
             <div style="font-size: 2rem; color: #00d4ff; font-weight: 600; text-shadow: 0 0 10px rgba(0,212,255,0.3);">
-                🚀 CRYPTO AI
+                🚀 Crypto AI Trader
             </div>
             <div style="color: #8892a6; font-size: 0.85rem; margin-top: 0.3rem;">
-                Trading Intelligence Platform
+                Local-first QVAC Intelligence
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1598,16 +1540,24 @@ def main():
         <div style="background: rgba(26,31,46,0.6); border: 1px solid rgba(0,212,255,0.2); border-radius: 6px; padding: 1rem;">
             <div style="color: #e8eaed; font-weight: 600; margin-bottom: 0.8rem;">System Status</div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                <div style="color: #8892a6; font-size: 0.85rem;">Bot Status</div>
-                <div style="color: #00ff41; font-weight: 600;">● Running</div>
+                <div style="color: #8892a6; font-size: 0.85rem;">Runtime Status</div>
+                <div style="color: {bot_color}; font-weight: 600;">● {bot_label}</div>
             </div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                 <div style="color: #8892a6; font-size: 0.85rem;">Agents</div>
-                <div style="color: #00ff41; font-weight: 600;">9/9</div>
+                <div style="color: #00ff41; font-weight: 600;">{active_agents}/{total_agents}</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                <div style="color: #8892a6; font-size: 0.85rem;">Provider</div>
+                <div style="color: #00d4ff;">{sidebar_provider}</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                <div style="color: #8892a6; font-size: 0.85rem;">Local Only</div>
+                <div style="color: #00d4ff;">{sidebar_local_only}</div>
             </div>
             <div style="display: flex; justify-content: space-between;">
                 <div style="color: #8892a6; font-size: 0.85rem;">Last Update</div>
-                <div style="color: #00d4ff;">now</div>
+                <div style="color: #00d4ff;">{last_seen}</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1685,8 +1635,8 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style="text-align: center; color: #8892a6; font-size: 0.8rem; padding: 1rem 0;">
-        <div>Crypto AI Trading Dashboard v2.0 | AUDITED & SECURED</div>
-        <div style="margin-top: 0.3rem;">Auto-refresh enabled • Real-time data • Production ready</div>
+        <div>Crypto AI Trader Dashboard | QVAC Edge AI Showcase</div>
+        <div style="margin-top: 0.3rem;">Local-first telemetry • QVAC provider status • Edge AI demo</div>
     </div>
     """, unsafe_allow_html=True)
 

@@ -18,7 +18,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import ENV_PATH, settings
 from services.coingecko_service import CoinGeckoService
-from services.groq_service import GroqService
+from services.fear_greed_service import FearGreedService
+from services.ai_provider import ProviderSettings, create_ai_provider
+from agents.market_analyst_agent import MarketAnalystAgent
+from agents.news_agent import NewsAgent
+from agents.sentiment_agent import SentimentAgent
+from agents.whale_tracker_agent import WhaleTrackerAgent
+from agents.liquidation_agent import LiquidationAgent
+from agents.risk_agent import RiskAgent
+from agents.supervisor_agent import SupervisorAgent
 from services.live_exchange import BinanceFuturesLiveExecutor, LiveExecutionError
 from utils.runtime_safety import connect_sqlite, install_secret_redaction
 
@@ -64,6 +72,7 @@ install_secret_redaction(
     logger,
     (
         settings.groq_api_key,
+        settings.qvac_api_key,
         settings.binance_api_key or "",
         settings.binance_secret_key or "",
         settings.telegram_bot_token or "",
@@ -174,6 +183,17 @@ def ensure_dashboard_tables(db_path: Path) -> None:
                 market_cap REAL NOT NULL DEFAULT 0,
                 volume_24h REAL NOT NULL DEFAULT 0,
                 source TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_telemetry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                status TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'local_rules',
+                result_json TEXT NOT NULL
             )
         """)
         conn.execute("""
@@ -319,6 +339,39 @@ def store_market_snapshot(db_path: Path, symbol: str, market: dict) -> None:
         conn.commit()
 
 
+def load_market_history(db_path: Path, symbol: str, limit: int = 100) -> list[dict]:
+    """Load cached public snapshots for local edge analysis."""
+    with connect_sqlite(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT price, change_24h, market_cap, volume_24h, source, timestamp
+            FROM market_snapshots
+            WHERE symbol = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (symbol, limit),
+        ).fetchall()
+    return [
+        {"price": row[0], "change_24h": row[1], "market_cap": row[2], "volume_24h": row[3], "source": row[4], "timestamp": row[5]}
+        for row in reversed(rows)
+    ]
+
+
+def store_agent_telemetry(db_path: Path, symbol: str, agent: str, result: dict, provider: str = "local_rules", status: str = "ACTIVE") -> None:
+    """Persist real agent output for dashboard telemetry and audits."""
+    with connect_sqlite(db_path) as conn:
+        conn.execute(
+            "INSERT INTO agent_telemetry (timestamp, symbol, agent, status, provider, result_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (datetime.now().isoformat(timespec="seconds"), symbol, agent, status, provider, json.dumps(result, separators=(",", ":"))),
+        )
+        conn.execute("""
+            DELETE FROM agent_telemetry
+            WHERE id NOT IN (SELECT id FROM agent_telemetry ORDER BY id DESC LIMIT 1000)
+        """)
+        conn.commit()
+
+
 def store_trading_signal(db_path: Path, symbol: str, signal: dict, price: float) -> None:
     with connect_sqlite(db_path) as conn:
         conn.execute(
@@ -405,7 +458,7 @@ def paper_execute_signal(db_path: Path, config, symbol: str, signal: dict, price
                 return "Skipped BUY: position already open"
             if open_count >= config.max_open_positions:
                 return "Skipped BUY: max open positions reached"
-            notional = 10000 * (config.max_risk_per_trade / 100)
+            notional = config.paper_account_balance * (config.max_risk_per_trade / 100)
             quantity = round(notional / price, 8) if price else 0
             conn.execute(
                 """
@@ -421,7 +474,7 @@ def paper_execute_signal(db_path: Path, config, symbol: str, signal: dict, price
                     price,
                     price,
                     quantity,
-                    min(config.max_leverage, 1),
+                    1,
                     datetime.now().isoformat(timespec="seconds"),
                     signal.get("reason", ""),
                 ),
@@ -475,6 +528,21 @@ def get_live_open_count(db_path: Path) -> int:
         return int(
             conn.execute("SELECT COUNT(*) FROM live_positions WHERE status = 'OPEN'").fetchone()[0]
         )
+
+
+def get_today_paper_loss_usdt(db_path: Path) -> float:
+    """Return realized paper loss for the deterministic risk gate."""
+    today = datetime.now().date().isoformat()
+    with connect_sqlite(db_path) as conn:
+        loss = conn.execute(
+            """
+            SELECT COALESCE(SUM(CASE WHEN pnl < 0 THEN ABS(pnl) ELSE 0 END), 0)
+            FROM paper_positions
+            WHERE status = 'CLOSED' AND closed_at LIKE ?
+            """,
+            (f"{today}%",),
+        ).fetchone()[0]
+    return float(loss or 0)
 
 
 def get_today_live_loss_usdt(db_path: Path) -> float:
@@ -647,8 +715,32 @@ class CryptoTradingBot:
         self.total_pnl = 0.0
         self.db_path = resolve_sqlite_path(self.config.database_url)
         self.market_service = CoinGeckoService()
-        self.groq_service = GroqService(self.config.groq_api_key, self.config.groq_model)
+        self.ai_service = create_ai_provider(ProviderSettings(
+            ai_provider=self.config.ai_provider,
+            qvac_base_url=self.config.qvac_base_url,
+            qvac_api_key=self.config.qvac_api_key,
+            qvac_model=self.config.qvac_model,
+            groq_api_key=self.config.groq_api_key,
+            groq_model=self.config.groq_model,
+            local_only_inference=self.config.local_only_inference,
+            enable_groq_fallback=self.config.enable_groq_fallback,
+        ))
+        self.fear_greed_service = FearGreedService()
+        self.market_analyst = MarketAnalystAgent(self.market_service)
+        self.news_agent = NewsAgent(self.ai_service)
+        self.sentiment_agent = SentimentAgent(self.fear_greed_service, self.news_agent, self.ai_service)
+        self.whale_tracker = WhaleTrackerAgent(self.market_service)
+        self.liquidation_agent = LiquidationAgent(self.market_service)
+        self.risk_agent = RiskAgent(self.config)
+        self.decision_agent = SupervisorAgent(self.config, self.ai_service, self.risk_agent)
         self.live_executor: Optional[BinanceFuturesLiveExecutor] = None
+        logger.info(
+            "AI inference boundary: provider=%s endpoint=%s local_only=%s groq_fallback=%s",
+            self.ai_service.primary.name,
+            self.ai_service.primary.chat_completions_url,
+            str(self.ai_service.local_only_inference).lower(),
+            str(self.ai_service.groq_fallback is not None).lower(),
+        )
 
         logger.info("=" * 60)
         logger.info("CRYPTO AI TRADING BOT INITIALIZED")
@@ -690,11 +782,9 @@ class CryptoTradingBot:
         else:
             logger.info("OK: Running in PAPER/BACKTEST mode (no real trades)")
 
-        # Check API keys
-        if not self.config.groq_api_key:
-            logger.error("ERROR: GROQ_API_KEY is missing")
-            return False
-        logger.info("OK: Groq API key found")
+        logger.info("OK: AI provider configured: %s", self.config.ai_provider)
+        if self.config.local_only_inference:
+            logger.info("OK: Local-only inference policy is active")
 
         if self.config.is_live_mode():
             if not self.config.binance_api_key or not self.config.binance_secret_key:
@@ -783,28 +873,31 @@ class CryptoTradingBot:
         }
 
     async def analyze_symbol(self, symbol: str, market: dict) -> dict:
-        """Combine market data and Groq AI into a final signal."""
-        fallback = self.technical_fallback_signal(symbol, market)
-        payload = {
-            "symbol": symbol,
-            "price": market["price"],
-            "change_24h": market.get("change_24h", 0),
-            "volume_24h": market.get("volume_24h", 0),
-            "technical_fallback": fallback,
-            "trading_mode": self.config.trading_mode,
-            "confidence_threshold": self.config.confidence_threshold,
-        }
-        try:
-            ai_signal = await asyncio.wait_for(self.groq_service.trading_decision(payload), timeout=30)
-        except asyncio.TimeoutError:
-            publish_dashboard_event(self.db_path, "Groq", f"{symbol}: AI timeout, using technical fallback", "WARNING")
-            ai_signal = None
-        if not ai_signal:
-            return fallback
-
-        if ai_signal["confidence"] < self.config.confidence_threshold and fallback["action"] == "HOLD":
-            ai_signal["action"] = "HOLD"
-        return ai_signal
+        """Run deterministic local agents and use QVAC only for bounded synthesis."""
+        history = load_market_history(self.db_path, symbol)
+        technical = self.market_analyst.analyze(symbol, market, history)
+        news = await asyncio.to_thread(self.news_agent.analyze)
+        fear_greed = await asyncio.to_thread(self.fear_greed_service.fetch)
+        sentiment = self.sentiment_agent.analyze(news, fear_greed)
+        whale = self.whale_tracker.analyze(symbol, market, history)
+        liquidation = self.liquidation_agent.analyze(market, technical, whale)
+        analyses = {"market": technical, "news": news, "sentiment": sentiment, "whale": whale, "liquidation": liquidation}
+        for agent, result in analyses.items():
+            agent_name = {"market": "MarketAnalyst", "news": "NewsAgent", "sentiment": "SentimentAgent", "whale": "WhaleTracker", "liquidation": "LiquidationAgent"}[agent]
+            provider = str(result.get("provider", "local_rules"))
+            logger.info("%s %s result=%s", symbol, agent_name, result)
+            store_agent_telemetry(self.db_path, symbol, agent_name, result, provider)
+            publish_dashboard_event(self.db_path, agent_name, f"{symbol}: {json.dumps(result, separators=(',', ':'))[:300]}")
+        paper_loss_limit = self.config.paper_account_balance * (self.config.daily_max_loss / 100)
+        daily_loss_hit = get_today_paper_loss_usdt(self.db_path) >= paper_loss_limit
+        decision = await self.decision_agent.analyze_and_decide(symbol, analyses, emergency_stop_requested(self.config), daily_loss_hit)
+        risk_result = {"safety_flags": decision["safety_flags"], "action": decision["action"]}
+        logger.info("%s RiskAgent result=%s", symbol, risk_result)
+        store_agent_telemetry(self.db_path, symbol, "RiskAgent", risk_result, "local_rules")
+        logger.info("%s DecisionAgent result=%s", symbol, decision)
+        store_agent_telemetry(self.db_path, symbol, "DecisionAgent", decision, decision.get("provider", "local_fallback"))
+        logger.info("%s decision provider=%s action=%s confidence=%s", symbol, decision.get("provider"), decision["action"], decision["confidence"])
+        return decision
 
     async def run_market_cycle(self, loop_count: int) -> None:
         """Fetch prices, produce AI signals, and simulate paper execution."""
@@ -906,17 +999,6 @@ class CryptoTradingBot:
                         self.running = False
                         break
 
-                    # TODO: Implement trading loop logic
-                    # 1. Fetch market data
-                    # 2. Run market analysis
-                    # 3. Get news and sentiment
-                    # 4. Track whale activity
-                    # 5. Check liquidations
-                    # 6. Run supervisor agent
-                    # 7. Execute trades if signal
-                    # 8. Manage risk
-                    # 9. Log results
-                    # 10. Update dashboard
                     await self.run_market_cycle(loop_count)
 
                     logger.info("Trading loop cycle completed")

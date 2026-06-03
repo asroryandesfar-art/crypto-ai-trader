@@ -53,19 +53,15 @@ class CoinGeckoService:
             "include_24hr_change": "true",
             "include_24hr_vol": "true",
         }
-        last_error = None
         for attempt in range(3):
             try:
                 response = requests.get(f"{self.base_url}/simple/price", params=params, timeout=15)
                 response.raise_for_status()
                 break
-            except requests.RequestException as exc:
-                last_error = exc
+            except requests.RequestException:
                 if attempt == 2:
                     raise
                 time.sleep(0.5 * (attempt + 1))
-        if last_error and "response" not in locals():
-            raise last_error
         by_id = response.json()
         result = {}
         for symbol in symbols:

@@ -8,7 +8,7 @@ import re
 from typing import Optional
 from pathlib import Path
 from dotenv import load_dotenv
-from pydantic import Field, validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import logging
 
@@ -34,7 +34,13 @@ class Settings(BaseSettings):
     # ============================================
     # API Keys (CRITICAL: Never hardcode)
     # ============================================
-    groq_api_key: str = Field(..., alias="GROQ_API_KEY", repr=False)
+    ai_provider: str = Field(default="qvac", alias="AI_PROVIDER")
+    qvac_base_url: str = Field(default="http://127.0.0.1:11434/v1", alias="QVAC_BASE_URL")
+    qvac_api_key: str = Field(default="local-qvac-token", alias="QVAC_API_KEY", repr=False)
+    qvac_model: str = Field(default="qvac-local", alias="QVAC_MODEL")
+    local_only_inference: bool = Field(default=True, alias="LOCAL_ONLY_INFERENCE")
+    enable_groq_fallback: bool = Field(default=False, alias="ENABLE_GROQ_FALLBACK")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY", repr=False)
     groq_model: str = Field(default="llama-3.1-8b-instant", alias="GROQ_MODEL")
     binance_api_key: Optional[str] = Field(None, alias="BINANCE_API_KEY", repr=False)
     binance_secret_key: Optional[str] = Field(None, alias="BINANCE_SECRET_KEY", repr=False)
@@ -95,6 +101,11 @@ class Settings(BaseSettings):
     )
 
     # ============================================
+    # Paper Trading
+    # ============================================
+    paper_account_balance: float = Field(default=10000.0, alias="PAPER_ACCOUNT_BALANCE")
+
+    # ============================================
     # Market Data
     # ============================================
     timeframes: str = Field(default="15m,1h,4h", alias="TIMEFRAMES")
@@ -122,38 +133,46 @@ class Settings(BaseSettings):
     # Validators
     # ============================================
 
-    @validator(
+    @field_validator(
         "groq_api_key",
+        "qvac_api_key",
         "binance_api_key",
         "binance_secret_key",
         "telegram_bot_token",
         "telegram_chat_id",
         "live_order_confirmation",
-        pre=True,
+        mode="before",
     )
+    @classmethod
     def strip_env_strings(cls, v):
         """Trim accidental whitespace around secrets and control flags."""
         if isinstance(v, str):
             return v.strip()
         return v
 
-    @validator("groq_api_key", pre=True, always=True)
-    def validate_groq_key(cls, v):
-        """Validate Groq API key is provided."""
-        if not v:
-            raise ValueError("GROQ_API_KEY is required")
-        return v
+    @field_validator("ai_provider", mode="before")
+    @classmethod
+    def validate_ai_provider(cls, v):
+        """Allow local QVAC or explicitly selected Groq inference."""
+        normalized = str(v).strip().lower()
+        if normalized == "local_qvac":
+            normalized = "qvac"
+        if normalized not in {"qvac", "groq"}:
+            raise ValueError("AI_PROVIDER must be 'qvac', 'local_qvac', or 'groq'")
+        return normalized
 
-    @validator("trading_mode")
+    @field_validator("trading_mode", mode="before")
+    @classmethod
     def validate_trading_mode(cls, v):
         """Validate trading mode is valid."""
         valid_modes = ["paper", "backtest", "live"]
-        v = v.lower()
+        v = str(v).lower()
         if v not in valid_modes:
             raise ValueError(f"TRADING_MODE must be one of {valid_modes}")
         return v
 
-    @validator("binance_account_type")
+    @field_validator("binance_account_type", mode="before")
+    @classmethod
     def validate_binance_account_type(cls, v):
         """Validate live Binance account routing."""
         normalized = str(v).strip().lower().replace("-", "_")
@@ -171,7 +190,8 @@ class Settings(BaseSettings):
             raise ValueError(f"BINANCE_ACCOUNT_TYPE must be one of {valid_types}")
         return normalized
 
-    @validator("symbols")
+    @field_validator("symbols", mode="before")
+    @classmethod
     def validate_symbols(cls, v):
         """Allow only explicit USDT pair symbols used by the bot and exchange layer."""
         raw = str(v).strip().upper()
@@ -190,63 +210,72 @@ class Settings(BaseSettings):
             raise ValueError(f"Invalid SYMBOLS entries: {', '.join(invalid)}")
         return ",".join(symbols)
 
-    @validator("max_risk_per_trade")
+    @field_validator("max_risk_per_trade")
+    @classmethod
     def validate_max_risk(cls, v):
         """Validate risk per trade is reasonable."""
         if v <= 0 or v > 5:
             raise ValueError("MAX_RISK_PER_TRADE must be between 0 and 5")
         return v
 
-    @validator("daily_max_loss")
+    @field_validator("daily_max_loss")
+    @classmethod
     def validate_daily_max_loss(cls, v):
         """Validate daily max loss is reasonable."""
         if v <= 0 or v > 10:
             raise ValueError("DAILY_MAX_LOSS must be between 0 and 10")
         return v
 
-    @validator("confidence_threshold")
+    @field_validator("confidence_threshold")
+    @classmethod
     def validate_confidence(cls, v):
         """Validate confidence threshold is between 0 and 100."""
         if v < 0 or v > 100:
             raise ValueError("CONFIDENCE_THRESHOLD must be between 0 and 100")
         return v
 
-    @validator("max_leverage")
+    @field_validator("max_leverage")
+    @classmethod
     def validate_leverage(cls, v):
         """Validate leverage is reasonable."""
         if v < 1 or v > 20:
             raise ValueError("MAX_LEVERAGE must be between 1 and 20")
         return v
 
-    @validator("max_symbols_per_cycle")
+    @field_validator("max_symbols_per_cycle")
+    @classmethod
     def validate_max_symbols_per_cycle(cls, v):
         """Limit dynamic symbol scans so live loops remain operational."""
         if v < 1 or v > 200:
             raise ValueError("MAX_SYMBOLS_PER_CYCLE must be between 1 and 200")
         return v
 
-    @validator("max_live_order_usdt")
+    @field_validator("max_live_order_usdt")
+    @classmethod
     def validate_max_live_order(cls, v):
         """Validate the live order hard cap."""
         if v <= 0 or v > 1000:
             raise ValueError("MAX_LIVE_ORDER_USDT must be between 0 and 1000")
         return v
 
-    @validator("min_live_order_usdt")
+    @field_validator("min_live_order_usdt")
+    @classmethod
     def validate_min_live_order(cls, v):
         """Validate the live order minimum."""
         if v <= 0 or v > 1000:
             raise ValueError("MIN_LIVE_ORDER_USDT must be between 0 and 1000")
         return v
 
-    @validator("live_stop_loss_pct")
+    @field_validator("live_stop_loss_pct")
+    @classmethod
     def validate_live_stop_loss(cls, v):
         """Validate live stop loss percentage."""
         if v <= 0 or v > 20:
             raise ValueError("LIVE_STOP_LOSS_PCT must be between 0 and 20")
         return v
 
-    @validator("live_take_profit_pct")
+    @field_validator("live_take_profit_pct")
+    @classmethod
     def validate_live_take_profit(cls, v):
         """Validate live take profit percentage."""
         if v < 0 or v > 50:

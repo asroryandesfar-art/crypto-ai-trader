@@ -14,7 +14,7 @@ cp .env.vps.example .env
 nano .env
 ```
 
-4. Isi `GROQ_API_KEY`, `BINANCE_API_KEY`, `BINANCE_SECRET_KEY`, symbol, dan batas risiko.
+4. Jalankan server QVAC lokal, lalu isi `QVAC_MODEL`, `BINANCE_API_KEY`, `BINANCE_SECRET_KEY`, symbol, dan batas risiko. Isi `GROQ_API_KEY` hanya jika fallback remote memang diaktifkan.
 5. Install service:
 
 ```bash
