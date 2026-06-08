@@ -1498,6 +1498,129 @@ def page_ai_chat():
         st.session_state.ai_chat_messages.append({"role": "assistant", "content": answer})
 
 
+INTERACTIVE_DEMO_AGENTS = [
+    {
+        "name": "News Agent",
+        "reasoning": "Scanning recent market narratives for events that could change short-term direction.",
+        "evidence": "Negative exchange-flow coverage and increased discussion of near-term sell pressure.",
+    },
+    {
+        "name": "Sentiment Agent",
+        "reasoning": "Comparing social momentum and market tone to identify weakening conviction.",
+        "evidence": "Bullish engagement declined while cautious and bearish language increased.",
+    },
+    {
+        "name": "Whale Agent",
+        "reasoning": "Reviewing simulated large-holder activity for unusual exchange-bound movement.",
+        "evidence": "Large-wallet exchange inflows rose above the demonstration baseline.",
+    },
+    {
+        "name": "Risk Agent",
+        "reasoning": "Aggregating volatility, concentration, and downside exposure into a safety assessment.",
+        "evidence": "Volatility expanded and modeled portfolio exposure moved into the elevated-risk band.",
+    },
+    {
+        "name": "Decision Agent",
+        "reasoning": "Combining the independent agent findings under the dashboard's risk-first policy.",
+        "evidence": "Three aligned risk signals support a defensive SELL decision with high confidence.",
+    },
+]
+
+
+def render_interactive_demo_progress(placeholder, completed_count: int, running_index=None) -> None:
+    cards = []
+    visible_count = completed_count + (1 if running_index is not None else 0)
+    for index, agent in enumerate(INTERACTIVE_DEMO_AGENTS[:visible_count]):
+        is_running = index == running_index
+        status = "Running" if is_running else "Completed ✓"
+        status_color = "#ffd60a" if is_running else "#00ff41"
+        border_color = "rgba(255,214,10,0.45)" if is_running else "rgba(0,255,65,0.3)"
+        cards.append(
+            f"""
+            <div style="background: rgba(26,31,46,0.72); border: 1px solid {border_color};
+                        border-radius: 8px; padding: 1rem 1.1rem; margin: 0.65rem 0;">
+                <div style="display: flex; justify-content: space-between; gap: 1rem; align-items: center;">
+                    <div style="color: #00d4ff; font-size: 1rem; font-weight: 650;">
+                        {html_escape(agent["name"])}
+                    </div>
+                    <div style="color: {status_color}; font-size: 0.82rem; font-weight: 650;">
+                        {status}
+                    </div>
+                </div>
+                <div style="color: #e8eaed; margin-top: 0.75rem; line-height: 1.5;">
+                    <strong>Reasoning:</strong> {html_escape(agent["reasoning"])}
+                </div>
+                <div style="color: #aab2c0; margin-top: 0.45rem; line-height: 1.5;">
+                    <strong>Evidence:</strong> {html_escape(agent["evidence"])}
+                </div>
+            </div>
+            """
+        )
+    placeholder.markdown("".join(cards), unsafe_allow_html=True)
+
+
+def render_interactive_multi_agent_demo() -> None:
+    st.markdown("---")
+    st.subheader("Interactive Multi-Agent Demo")
+    st.markdown(
+        "Run a safe, frontend-only walkthrough showing how independent evidence is "
+        "aggregated before the final decision."
+    )
+
+    run_demo = st.button(
+        "Run Multi-Agent Analysis",
+        key="run_interactive_multi_agent_demo",
+        type="primary",
+    )
+    progress_placeholder = st.empty()
+
+    if run_demo:
+        st.session_state.interactive_demo_complete = False
+        for index in range(len(INTERACTIVE_DEMO_AGENTS)):
+            render_interactive_demo_progress(
+                progress_placeholder,
+                completed_count=index,
+                running_index=index,
+            )
+            time.sleep(0.7)
+            render_interactive_demo_progress(
+                progress_placeholder,
+                completed_count=index + 1,
+            )
+            time.sleep(0.25)
+        st.session_state.interactive_demo_complete = True
+    elif st.session_state.get("interactive_demo_complete"):
+        render_interactive_demo_progress(
+            progress_placeholder,
+            completed_count=len(INTERACTIVE_DEMO_AGENTS),
+        )
+
+    if st.session_state.get("interactive_demo_complete"):
+        st.markdown(
+            """
+            <div style="background: linear-gradient(135deg, rgba(255,0,110,0.14), rgba(26,31,46,0.88));
+                        border: 1px solid rgba(255,0,110,0.5); border-radius: 10px;
+                        padding: 1.3rem; margin-top: 1rem;">
+                <div style="color: #8892a6; font-size: 0.82rem; text-transform: uppercase;
+                            letter-spacing: 0.08em;">Final AI Decision</div>
+                <div style="color: #ff006e; font-size: 2rem; font-weight: 750; margin-top: 0.2rem;">
+                    SELL
+                </div>
+                <div style="color: #e8eaed; font-size: 1rem; font-weight: 600;">
+                    Confidence: 92%
+                </div>
+                <div style="color: #c6ccd7; line-height: 1.6; margin-top: 0.9rem;">
+                    The Decision Agent recommends SELL because whale activity increased, sentiment
+                    weakened, and risk exposure became elevated. The final output is generated
+                    through multi-agent evidence aggregation, not a single indicator.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption("Public judge demo only. Uses fixed sample evidence and does not execute trades.")
+
+
 def main():
     backend_status = get_backend_status()
     bot_color = "#00ff41" if backend_status["connected"] else "#ffd60a"
@@ -1587,6 +1710,7 @@ def main():
     # Page routing
     if "🏠" in page:
         page_overview()
+        render_interactive_multi_agent_demo()
     elif page == "AI Chat":
         page_ai_chat()
     elif "📊" in page:
