@@ -176,6 +176,16 @@ def require_dashboard_auth() -> None:
 
 require_dashboard_auth()
 
+def is_public_demo_mode() -> bool:
+    """Detect Streamlit Cloud or an explicit public judge-demo deployment."""
+    configured = os.getenv("PUBLIC_DEMO_MODE", "").strip().lower()
+    if configured:
+        return configured in {"1", "true", "yes", "on"}
+    if os.getenv("STREAMLIT_SHARING_MODE"):
+        return True
+    return Path.cwd().as_posix().startswith("/mount/src/") or not ENV_PATH.exists()
+
+
 def resolve_database_path():
     """Resolve sqlite DATABASE_URL into the DB file shared with the backend."""
     database_url = os.getenv("DATABASE_URL", "sqlite:///./crypto_trader.db")
@@ -1623,17 +1633,27 @@ def render_interactive_multi_agent_demo() -> None:
 
 def main():
     backend_status = get_backend_status()
-    bot_color = "#00ff41" if backend_status["connected"] else "#ffd60a"
-    bot_label = html_escape("Connected" if backend_status["connected"] else backend_status["status"].title())
-    mode_label = html_escape(backend_status["mode"].upper())
-    last_seen = html_escape(backend_status["last_heartbeat"] or "not started")
-    loop_count = html_escape(backend_status["loop_count"])
+    public_demo = is_public_demo_mode() and not backend_status["connected"]
+    runtime_color = "#00ff41" if public_demo or backend_status["connected"] else "#ffd60a"
+    runtime_label = html_escape(
+        "Demo Ready" if public_demo else "Connected" if backend_status["connected"] else backend_status["status"].title()
+    )
+    backend_color = "#ffd60a" if public_demo or not backend_status["connected"] else "#00ff41"
+    backend_label = html_escape(
+        "Not Attached" if public_demo else "Connected" if backend_status["connected"] else backend_status["status"].title()
+    )
+    mode_label = html_escape("JUDGE DEMO" if public_demo else backend_status["mode"].upper())
+    last_seen = html_escape("Live UI" if public_demo else backend_status["last_heartbeat"] or "not started")
+    loop_count = html_escape("N/A" if public_demo else backend_status["loop_count"])
     agent_statuses = get_agent_runtime_status()
     active_agents = int(agent_statuses["Active"].sum()) if not agent_statuses.empty else 0
     total_agents = len(AGENT_NAMES)
+    agent_label = "Demo workflow" if public_demo else f"{active_agents}/{total_agents}"
     latest_decision = get_latest_agent_results().get("DecisionAgent")
-    sidebar_provider = html_escape(latest_decision.get("provider", "not_run") if latest_decision else "not_run")
-    sidebar_local_only = "ON" if os.getenv("LOCAL_ONLY_INFERENCE", "true").strip().lower() in {"1", "true", "yes", "on"} else "OFF"
+    sidebar_provider = html_escape(
+        "Frontend evidence" if public_demo else latest_decision.get("provider", "not_run") if latest_decision else "not_run"
+    )
+    sidebar_local_only = "SAFE DEMO" if public_demo else "ON" if os.getenv("LOCAL_ONLY_INFERENCE", "true").strip().lower() in {"1", "true", "yes", "on"} else "OFF"
 
     # Sidebar navigation
     with st.sidebar:
@@ -1664,11 +1684,11 @@ def main():
             <div style="color: #e8eaed; font-weight: 600; margin-bottom: 0.8rem;">System Status</div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                 <div style="color: #8892a6; font-size: 0.85rem;">Runtime Status</div>
-                <div style="color: {bot_color}; font-weight: 600;">● {bot_label}</div>
+                <div style="color: {runtime_color}; font-weight: 600;">● {runtime_label}</div>
             </div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                 <div style="color: #8892a6; font-size: 0.85rem;">Agents</div>
-                <div style="color: #00ff41; font-weight: 600;">{active_agents}/{total_agents}</div>
+                <div style="color: #00ff41; font-weight: 600;">{agent_label}</div>
             </div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                 <div style="color: #8892a6; font-size: 0.85rem;">Provider</div>
@@ -1690,7 +1710,7 @@ def main():
             <div style="color: #e8eaed; font-weight: 600; margin-bottom: 0.8rem;">Backend Link</div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                 <div style="color: #8892a6; font-size: 0.85rem;">Connection</div>
-                <div style="color: {bot_color}; font-weight: 600;">● {bot_label}</div>
+                <div style="color: {backend_color}; font-weight: 600;">● {backend_label}</div>
             </div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                 <div style="color: #8892a6; font-size: 0.85rem;">Mode</div>
